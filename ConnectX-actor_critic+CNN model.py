@@ -49,6 +49,27 @@ env.specification.action
 env.specification.observation
 
 
+class Config:
+    def __init__(self, config_dict):
+        self.__dict__.update(config_dict)
+
+# 初始化 Config 
+config_dict = {
+    'episodeSteps': 1000,        
+    'actTimeout': 2,             
+    'runTimeout': 1200,          
+    'columns': 7,                
+    'rows': 6,                   
+    'inarow': 4,                 
+    'agentTimeout': 60,          
+    'timeout': 2                 
+}
+
+config = Config(config_dict)
+
+obs = env.specification.observation
+#grid = np.asarray(obs.board).reshape(config.rows, config.columns)
+
 # Configuration paramaters
 eps = np.finfo(np.float32).eps.item() #minimize none zero value
 gamma = 0.95  # Discount factor for past rewards
@@ -63,39 +84,40 @@ input_dim = (n_rows, n_cols, n_players)
 
 # 定義共享輸入層
 def input_layer(in_):
-    conv1 = tf.keras.layers.Conv2D(filters=42, kernel_size=(3,3), activation='relu')(in_)
-    conv2 = tf.keras.layers.Conv2D(filters=42, kernel_size=(3,3), activation='relu', padding='same')(conv1)
-    batch_norm = tf.keras.layers.BatchNormalization(renorm=True)(conv2)
-    flat = tf.keras.layers.Flatten()(batch_norm)
-    dense = tf.keras.layers.Dense(256, activation='relu')(flat)
+    conv1 = tf.keras.layers.Conv2D(filters=42, kernel_size=(3,3), activation='relu', name='input_conv1')(in_)
+    conv2 = tf.keras.layers.Conv2D(filters=42, kernel_size=(3,3), activation='relu', padding='same', name='input_conv2')(conv1)
+    batch_norm = tf.keras.layers.BatchNormalization(name='input_batch_norm')(conv2)
+    flat = tf.keras.layers.Flatten(name='input_flat')(batch_norm)
+    dense = tf.keras.layers.Dense(256, activation='relu', name='input_dense')(flat)
     return dense
 
 ##The Actor-Critic model
 def ActorModel(num_actions,in_):
-    actions = tf.keras.layers.Dense(128, activation='tanh')(in_)
-    actions = tf.keras.layers.Dropout(0.2)(actions)
-    actions = tf.keras.layers.Dense(64, activation ='tanh')(actions)
-    actions = tf.keras.layers.LayerNormalization()(actions)
-    actions = tf.keras.layers.Dense(num_actions, activation='softmax')(actions)
+    actions = tf.keras.layers.Dense(128, activation='tanh', name='actor_dense1')(in_)
+    actions = tf.keras.layers.Dropout(0.2, name='actor_dropout1')(actions)
+    actions = tf.keras.layers.Dense(64, activation ='tanh', name='actor_dense2')(actions)
+    actions = tf.keras.layers.LayerNormalization(name='actor_layer_norm')(actions)
+    actions = tf.keras.layers.Dense(num_actions, activation='softmax', name='actor_dense3')(actions)
 
     return actions 
 
 def CriticModel(in_):
-    hidden1 = tf.keras.layers.Dense(128, activation='relu')(in_)
-    hidden1 = tf.keras.layers.Dropout(0.2)(hidden1)
-    hidden2 = tf.keras.layers.Dense( 64, activation='relu')(hidden1)
-    hidden2 = tf.keras.layers.LayerNormalization()(hidden2)
-    value = tf.keras.layers.Dense(1)(hidden2)
+    hidden1 = tf.keras.layers.Dense(128, activation='relu', name='critic_dense1')(in_)
+    hidden1 = tf.keras.layers.Dropout(0.2, name='critic_dropout1')(hidden1)
+    hidden2 = tf.keras.layers.Dense( 64, activation='relu', name='critic_dense2')(hidden1)
+    hidden2 = tf.keras.layers.LayerNormalization(name='critic_layer_norm')(hidden2)
+    value = tf.keras.layers.Dense(1, name='critic_dense3')(hidden2)
     
     return value
 
 
-input_ = tf.keras.layers.Input(shape=input_dim)
+input_ = tf.keras.layers.Input(shape=input_dim, name='input_layer')
 
 # 定義 Actor 和 Critic 模型的輸出
 shared_features = input_layer(input_)
 actor_output = ActorModel(n_actions, shared_features)
 critic_output = CriticModel(shared_features)
+
 
 # 建立 Actor-Critic 模型
 model = tf.keras.Model(inputs=input_, outputs=[actor_output, critic_output])
@@ -103,25 +125,25 @@ model = tf.keras.Model(inputs=input_, outputs=[actor_output, critic_output])
 
 # 使用學習率調度器和梯度裁剪
 lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
-    initial_learning_rate=7e-4,
+    initial_learning_rate=5e-3,
     decay_steps=10000,
     decay_rate=0.95
 )
 
 optimizer = tf.keras.optimizers.Adam(learning_rate=lr_schedule, clipnorm=1.0)
+actor_optimizer = tf.keras.optimizers.Adam(learning_rate=lr_schedule, clipnorm=1.0)
+critic_optimizer = tf.keras.optimizers.Adam(learning_rate=lr_schedule, clipnorm=1.0)
 
 
-action_loss_function = tf.keras.losses.CategoricalCrossentropy()
-#critic_loss_function = keras.losses.BinaryCrossentropy()
-#critic_loss_function = keras.losses.MeanSquaredError()
+#action_loss_function = tf.keras.losses.CategoricalCrossentropy(from_logits=True)
+
 critic_loss_function = tf.keras.losses.Huber()
-
 print(model.summary())
 
 
 
-## prep board for use in nn
 
+## prepare board for use in nn
 
 def get_board(state, player):
 
@@ -139,7 +161,7 @@ def get_board(state, player):
     # rotate to feed into convolutional network 
     return np.transpose(b, [1, 2, 0])
 
-
+'''
 def pretty_print_board(b):
 # Flatten the array to ensure it's 1D
     b = b.flatten()
@@ -175,7 +197,7 @@ def test_get_board():
     print('action', action)
 
 test_get_board()
-
+'''
 
 
 
@@ -194,6 +216,7 @@ def plot_timesteps(steps, rewards, a_loss, c_loss):
     plt.plot(a_loss)
     plt.plot(c_loss)
     plt.show()
+    
 
 # log discounted rewards
 def discount_rewards(rewards):
@@ -213,7 +236,8 @@ def expand_rewards(rewards, actions):
     return expanded
     
 
-## Training
+
+## Prepare for Training
 class ReplayMemory:
     def __init__(self, max_size):
         self.max_size = max_size
@@ -221,34 +245,82 @@ class ReplayMemory:
         self.states = []
         self.actions = []
         self.rewards = []
-        self.values = []
+        self.target_values = []
     
-    def add(self, state, action, reward, value):
+    def add(self, state, action, reward, target_value):
         self.states.append(state)
         self.actions.append(action)
         self.rewards.append(reward)
-        self.values.append(value)
+        self.target_values.append(target_value)
         
         # 當超過最大容量時，清除最舊的記錄
         if len(self.states) > self.max_size:
             self.states = self.states[self.clear_size:]
             self.actions = self.actions[self.clear_size:]
             self.rewards = self.rewards[self.clear_size:]
-            self.values = self.values[self.clear_size:]
+            self.target_values = self.target_values[self.clear_size:]
     
     def get_all(self):
-        return (self.states, self.actions, self.rewards, self.values)
+        return (self.states, self.actions, self.rewards, self.target_values)
 
-###
+"""
+#reward function
 def calculate_reward(raw_reward, done):
     if raw_reward is None:  # 非法移動
-        return -0.001
-    elif raw_reward == 0 and not done:  # 遊戲繼續
-        return 0.01  # 存活獎勵
-    elif raw_reward == 1:  # 獲勝
-        return 1.0
-    else:  # 失敗或平局
         return 0.0
+    elif raw_reward == 0 and not done:  # 遊戲繼續
+        return 1  # 存活獎勵
+    elif raw_reward == 1:  # 獲勝
+        return 1000000
+    else:  # 失敗或平局
+        return -10000
+"""
+    
+# Helper function for calculate_reward: checks if window satisfies heuristic conditions
+def check_window(window, num_discs, piece, config):
+    return (np.sum(window == piece) == (num_discs) and np.sum(window == 0) == (config.inarow - num_discs))
+
+
+# Helper function for calculate_reward: counts number of windows satisfying specified heuristic conditions
+def count_windows(grid, num_discs, piece, config):
+    num_windows = 0
+    # horizontal
+    for row in range(config.rows):
+        for col in range(config.columns-(config.inarow-1)):
+            window = np.asarray(grid[row, col:col+config.inarow])
+            if check_window(window, num_discs, piece, config):
+                num_windows += 1
+    # vertical
+    for row in range(config.rows-(config.inarow-1)):
+        for col in range(config.columns):
+            window = np.asarray(grid[row:row+config.inarow, col])
+            if check_window(window, num_discs, piece, config):
+                num_windows += 1
+    # positive diagonal
+    for row in range(config.rows-(config.inarow-1)):
+        for col in range(config.columns-(config.inarow-1)):
+            window = np.asarray(grid[range(row, row+config.inarow), range(col, col+config.inarow)])
+            if check_window(window, num_discs, piece, config):
+                num_windows += 1
+    # negative diagonal
+    for row in range(config.inarow-1, config.rows):
+        for col in range(config.columns-(config.inarow-1)):
+            window = np.asarray(grid[range(row, row-config.inarow, -1), range(col, col+config.inarow)])
+            if check_window(window, num_discs, piece, config):
+                num_windows += 1
+    return num_windows
+
+
+
+# Helper function for calculates value of heuristic for grid
+def calculate_reward(grid, mark, config):
+    num_threes = count_windows(grid, config.inarow-1, mark, config)
+    num_fours = count_windows(grid, config.inarow, mark, config)
+    num_threes_opp = count_windows(grid, config.inarow-1, mark%2+1, config)
+    num_fours_opp = count_windows(grid, config.inarow, mark%2+1, config)
+    score = 50*num_threes - 1e2*num_threes_opp - 1e4*num_fours_opp + 1e6*num_fours
+    return score
+
 
 def plot_progress(episode_data, title, window_size=10):
     plt.figure(figsize=(12, 6))
@@ -262,9 +334,16 @@ def plot_progress(episode_data, title, window_size=10):
     plt.grid(True)
     plt.show()
 
+
+
 def test_agent(model, n_games=12):
+    #env = make('connectx', debug=True)
+
+    # 重置環境
+    obs = trainer.reset() 
+    
     # 創建代理函數
-    agent = create_submission(model)
+    agent = my_agent(obs, config, model)
     
     # 使用 evaluate 進行評估
     print('********************  test agent **********************************')
@@ -272,10 +351,10 @@ def test_agent(model, n_games=12):
     
     # 對戰 negamax
     results_vs_negamax = evaluate("connectx", [agent, "negamax"], num_episodes=n_games)
-    print(f"\nVs Negamax - Results: {results_vs_negamax}")
+    print(f"\nVs Negamax - Results: {results_vs_negamax}")  
     
     # 對戰 random
-    results_vs_random = evaluate("connectx", [agent, "random"], num_episodes=n_games)
+    results_vs_random = evaluate("connectx", ["random", agent], num_episodes=n_games)
     print(f"Vs Random - Results: {results_vs_random}")
     
     # 計算總體勝率和先後手勝利
@@ -288,26 +367,20 @@ def test_agent(model, n_games=12):
     
     # 計算對戰 negamax 的結果
     for i, r in enumerate(results_vs_negamax):
-        if r[0] > r[1]:  # 獲勝
+        if r[0] and r[0] > r[1]:  # 獲勝
             total_wins += 1
-            if i % 2 == 0:  # 作為先手
-                first_player_wins += 1
-            else:  # 作為後手
-                second_player_wins += 1
-        elif r[0] < r[1]:  # 失敗
+            first_player_wins += 1
+        elif r[0] and r[0] < r[1]:  # 失敗
             total_losses += 1
         else:  # 平局
             total_ties += 1
     
     # 計算對戰 random 的結果
     for i, r in enumerate(results_vs_random):
-        if r[0] > r[1]:  # 獲勝
+        if r[1] and r[1] > r[0]:  # 獲勝
             total_wins += 1
-            if i % 2 == 0:  # 作為先手
-                first_player_wins += 1
-            else:  # 作為後手
-                second_player_wins += 1
-        elif r[0] < r[1]:  # 失敗
+            second_player_wins += 1
+        elif r[1] and r[1] < r[0]:  # 失敗
             total_losses += 1
         else:  # 平局
             total_ties += 1
@@ -321,7 +394,9 @@ def test_agent(model, n_games=12):
         'vs_negamax': results_vs_negamax,
         'vs_random': results_vs_random
     }
-    
+
+
+
     print("\nOverall Results:")
     print(f"Total Games: {total_games}")
     print(f"Total Wins: {total_wins} ({total_wins/total_games:.2%})")
@@ -340,9 +415,9 @@ def test_agent(model, n_games=12):
     
     return results
 
-def train_agent(model, save_path='model_weights'):
+def train_agent(model, save_path = '/kaggle/working/model_weights'):
     # 訓練參數設置
-    max_episodes = 500  # 總共進行500場遊戲
+    max_episodes = 900  # 總共進行900場遊戲
     
     # 探索參數
     explore = 1.0
@@ -382,18 +457,27 @@ def train_agent(model, save_path='model_weights'):
         done = False
         step = 0
         
+        print(obs['mark'])
+        print(config.inarow)
+        
+        
         # 進行一場完整的遊戲
         while not done:
             step += 1
             state_tensor = tf.convert_to_tensor(state)
+            #print(state_tensor)
             action_probs, state_value = model(state_tensor, training=True)
+            print(action_probs)
+            #print(state_value)
             
             # 確保動作概率的維度正確
             if len(action_probs.shape) > 2:
                 action_probs = tf.reduce_mean(action_probs, axis=[1,2])
             
             # 獲取有效移動
-            valid_moves = [i for i in range(n_cols) if obs['board'][i] == 0]
+            
+            valid_moves = [i for i in range(n_cols) if np.asarray(obs['board']).reshape(n_rows, n_cols)[0][i] == 0]
+            #print(valid_moves)
             
             if not valid_moves:
                 break
@@ -401,38 +485,34 @@ def train_agent(model, save_path='model_weights'):
             # 決定是探索還是利用
             if np.random.random() < explore:
                 action = np.random.choice(valid_moves)
+                print("Chosen action:", action)
             else:
-                # 獲取每個有效動作的評分
-                action_scores = []
-                for move in valid_moves:
-                    # 創建假設的下一個狀態
-                    next_board = obs['board'].copy()
-                    next_board[move] = player_mark
-                    next_state = get_board(next_board, player_mark)
-                    next_state = np.expand_dims(next_state, axis=0)
-                    next_state_tensor = tf.convert_to_tensor(next_state)
-                    
-                    # 獲取該動作的概率和價值評估
-                    _, next_value = model(next_state_tensor, training=False)
-                    action_prob = action_probs[0][move].numpy()
-                    
-                    # 結合動作概率和狀態價值進行評分
-                    combined_score = 0.7 * action_prob + 0.3 * next_value.numpy()[0][0]
-                    action_scores.append((move, combined_score))
+                # 根據action_probs提取合法動作的概率
+                valid_probs = np.array([action_probs[0][i] for i in valid_moves])
+                valid_probs /= np.sum(valid_probs)  # 正規化
                 
-                # 選擇評分最高的動作
-                action = max(action_scores, key=lambda x: x[1])[0]            
+                # 隨機選擇合法動作
+                action = np.random.choice(valid_moves, p=valid_probs)
+                print("Chosen action:", action)
+                      
+                
             # 執行動作
             obs, raw_reward, done, info = trainer.step(int(action))
+
+
             
             # 計算獎勵
-            reward = calculate_reward(raw_reward, done)
-            if player_mark == 2:
-                reward = -reward
+            print(np.asarray(obs['board']).reshape(n_rows, n_cols))
+            reward = calculate_reward(np.asarray(obs['board']).reshape(n_rows, n_cols), player_mark, config)
+            print(reward)
+            
+            state = get_board(obs['board'], player_mark)
+            state = np.expand_dims(state, axis=0)
             
             # 計算下一個狀態的價值
             if done:
                 target_value = reward
+                
             else:
                 next_state = get_board(obs['board'], player_mark)
                 next_state = np.expand_dims(next_state, axis=0)
@@ -445,11 +525,9 @@ def train_agent(model, save_path='model_weights'):
                 'state': state,
                 'action': action,
                 'reward': reward,
-                'predicted_value': state_value[0,0],
                 'target_value': target_value
             })
             
-            episode_reward += reward
             
             if not done:
                 state = get_board(obs['board'], player_mark)
@@ -463,14 +541,14 @@ def train_agent(model, save_path='model_weights'):
                 exp['reward'],
                 exp['target_value']
             )
-        
+
         # 從記憶體中獲取訓練數據並進行訓練
         if len(memory.states) > 0:
             states = tf.concat(memory.states, axis=0)
             actions = tf.convert_to_tensor(memory.actions)
-            target_values = tf.convert_to_tensor(memory.values, dtype=tf.float32)
+            target_values = tf.convert_to_tensor(memory.target_values, dtype=tf.float32)
             
-            with tf.GradientTape() as tape:
+            with tf.GradientTape(persistent=True) as tape:
                 action_probs, predicted_values = model(states, training=True)
                 
                 if len(action_probs.shape) > 2:
@@ -481,24 +559,51 @@ def train_agent(model, save_path='model_weights'):
                 
                 # 計算 log probabilities
                 selected_probs = tf.reduce_sum(action_probs * action_masks, axis=1)
-                log_probs = tf.math.log(selected_probs + eps)
+                selected_log_probs = tf.math.log(selected_probs + eps)
                 
                 # 計算優勢
                 advantages = target_values - tf.squeeze(predicted_values)
-                actor_loss = -tf.reduce_mean(log_probs * tf.stop_gradient(advantages))
+                actor_loss = -tf.math.reduce_sum(selected_log_probs * advantages)
+
                 
                 # Critic 損失
                 critic_loss = critic_loss_function(target_values, tf.squeeze(predicted_values))
+
                 
-                # 總損失
-                total_loss = actor_loss + 0.5 * critic_loss
-            
-            # 更新模型
-            grads = tape.gradient(total_loss, model.trainable_variables)
-            optimizer.apply_gradients(zip(grads, model.trainable_variables))
-            
-            actor_losses.append(float(actor_loss))
-            critic_losses.append(float(critic_loss))
+                # 獲取模型變量
+                all_variables = model.trainable_variables
+                actor_variables = [var for var in all_variables if 'actor' in var.path]
+                critic_variables = [var for var in all_variables if 'critic' in var.path]
+                shared_variables = [var for var in all_variables if 'input' in var.path]
+        
+    
+    
+                #  計算梯度
+                actor_grads = tape.gradient(actor_loss, actor_variables + shared_variables)
+                critic_grads = tape.gradient(critic_loss, critic_variables + shared_variables)
+    
+                # 合併共享層的梯度
+                shared_grads_actor = tape.gradient(actor_loss, shared_variables)
+                shared_grads_critic = tape.gradient(critic_loss, shared_variables)
+    
+                # 平均共享層梯度
+                shared_grads = [
+                    (ga + gc) / 2.0
+                    for ga, gc in zip(shared_grads_actor, shared_grads_critic)
+                ]
+    
+                # 更新參數
+                actor_optimizer.apply_gradients(zip(actor_grads, actor_variables + shared_variables))
+                critic_optimizer.apply_gradients(zip(critic_grads, critic_variables + shared_variables))
+    
+    
+                # 更新共享層參數
+                optimizer.apply_gradients(zip(shared_grads, shared_variables))
+    
+                actor_losses.append(float(actor_loss))
+                critic_losses.append(float(critic_loss))
+    
+                del tape
         
         # 更新探索率
         explore = max(min_explore, explore * decay_explore)
@@ -516,9 +621,7 @@ def train_agent(model, save_path='model_weights'):
             if len(actor_losses) > 0:
                 print(f"Actor Loss: {actor_losses[-1]:.4f}")
                 print(f"Critic Loss: {critic_losses[-1]:.4f}")
-                avg_value = np.mean([exp['predicted_value'] for exp in episode_memory])
                 avg_target = np.mean([exp['target_value'] for exp in episode_memory])
-                print(f"Avg Predicted Value: {avg_value:.4f}")
                 print(f"Avg Target Value: {avg_target:.4f}")
                 
                 # 計算移動平均獎勵
@@ -538,7 +641,7 @@ def train_agent(model, save_path='model_weights'):
         if episode > 0 and episode % 100 == 0:
             # 測試當前模型
             test_results = test_agent(model, n_games=20)
-            win_rate = test_results['wins'] / 20
+            win_rate = test_results['wins'] / 40
             
             print("\nTest Results:")
             print(f"Win Rate: {win_rate:.2%}")
@@ -548,11 +651,13 @@ def train_agent(model, save_path='model_weights'):
             
             # 如果性能提升，保存模型
             current_reward = win_rate
+            
+
             if current_reward > best_reward:
                 best_reward = current_reward
                 best_weights = model.get_weights()
                 
-                # 修改：使用正確的文件名格式
+                
                 model.save_weights(f'{save_path}/best_model.weights.h5')
                 print(f"New best model saved with win rate: {win_rate:.2%}")
             
@@ -563,11 +668,17 @@ def train_agent(model, save_path='model_weights'):
     
     # 訓練結束後的最終評估
     print("\nFinal Evaluation:")
-    final_results = test_agent(model, n_games=12)
+    final_results = test_agent(model, n_games=20)
     
     # 計算對戰 negamax 和 random 的總場次
-    total_games = 24  # 12場對戰negamax + 12場對戰random
+    total_games = 40  # 20場對戰negamax + 20場對戰random
     final_win_rate = final_results['wins']/total_games
+        
+    print(f"\nDetailed Results:")
+    print(f"Total Games: {total_games}")
+    print(f"Wins: {final_results['wins']}")
+    print(f"Losses: {final_results['losses']}")
+    print(f"Draws: {final_results['draws']}")
     
     print(f"Final Model Win Rate: {final_win_rate:.2%}")
     print(f"Best Model Win Rate: {best_reward:.2%}")
@@ -581,22 +692,18 @@ def train_agent(model, save_path='model_weights'):
         print("Best model performs better than final model")
         if best_weights is not None:
             model.set_weights(best_weights)
-            print(f"Restored best model weights with win rate: {best_reward:.2%}")
             model.save_weights(f'{save_path}/final_model.weights.h5')
-    
-    print(f"\nDetailed Results:")
-    print(f"Total Games: {total_games}")
-    print(f"Wins: {final_results['wins']}")
-    print(f"Losses: {final_results['losses']}")
-    print(f"Draws: {final_results['draws']}")
-    
+            print(f"Restored best model weights with win rate: {best_reward:.2%}")
+            
+    '''
     # 分別顯示對戰 negamax 和 random 的結果
     print("\nVs Negamax:")
     print(f"Results: {final_results['vs_negamax']}")
     
     print("\nVs Random:")
     print(f"Results: {final_results['vs_random']}")
-    
+    '''
+
     return model, {
         'episode_steps': episode_steps,
         'episode_rewards': episode_rewards,
@@ -606,127 +713,47 @@ def train_agent(model, save_path='model_weights'):
         'final_reward': final_win_rate
     }
 
-def create_submission(model):
-
-    def my_agent(obs, config):
-        # 獲取遊戲狀態
-        state = get_board(obs['board'], obs['mark'])
-        state = np.expand_dims(state, axis=0)
-        state_tensor = tf.convert_to_tensor(state)
-        
-        # 使用模型預測動作概率和狀態價值
-        action_probs, state_value = model(state_tensor, training=False)
-        if len(action_probs.shape) > 2:
-            action_probs = tf.reduce_mean(action_probs, axis=[1,2])
-        
-        # 獲取有效移動
-        valid_moves = [i for i in range(n_cols) if obs['board'][i] == 0]
-        if not valid_moves:
-            return 0
-        
-        # 對每個有效動作進行評估
-        best_action = None
-        best_value = float('-inf')
-        
-        for move in valid_moves:
-            # 創建假設的下一個狀態
-            next_board = obs['board'].copy()
-            next_board[move] = obs['mark']
-            next_state = get_board(next_board, obs['mark'])
-            next_state = np.expand_dims(next_state, axis=0)
-            next_state_tensor = tf.convert_to_tensor(next_state)
-            
-            # 獲取該動作的概率和價值評估
-            _, next_value = model(next_state_tensor, training=False)
-            action_prob = action_probs[0][move].numpy()
-            
-            # 結合動作概率和狀態價值進行評分
-            combined_score = 0.7 * action_prob + 0.3 * next_value.numpy()[0][0]
-            
-            # 更新最佳動作
-            if combined_score > best_value:
-                best_value = combined_score
-                best_action = move
-        
-        return int(best_action)
-    
-    return my_agent
-
-def test_self_play(model, n_games=100):
-#模型自我對戰
-    env = make('connectx', debug=True)
-    agent = create_submission(model)
-    
-    results = {
-        'player1_wins': 0,
-        'player2_wins': 0,
-        'draws': 0,
-        'invalid_moves': 0
-    }
-    
-    for game in range(n_games):
-        steps = env.run([agent, agent])
-        
-        # 分析遊戲結果
-        if steps[-1][0]['status'] == 'DONE':
-            reward = steps[-1][0]['reward']
-            if reward == 1:
-                results['player1_wins'] += 1
-            elif reward == -1:
-                results['player2_wins'] += 1
-            else:
-                results['draws'] += 1
-        else:
-            results['invalid_moves'] += 1
-        
-        # 顯示進度
-        if (game + 1) % 10 == 0:
-            print(f"\nGame {game + 1} completed")
-            print(f"Player 1 Wins: {results['player1_wins']}")
-            print(f"Player 2 Wins: {results['player2_wins']}")
-            print(f"Draws: {results['draws']}")
-            print(f"Invalid Games: {results['invalid_moves']}")
-    
-    # 顯示最終結果
-    print("\nFinal Self-Play Results:")
-    print(f"Total Games: {n_games}")
-    print(f"Player 1 Wins: {results['player1_wins']} ({results['player1_wins']/n_games:.2%})")
-    print(f"Player 2 Wins: {results['player2_wins']} ({results['player2_wins']/n_games:.2%})")
-    print(f"Draws: {results['draws']} ({results['draws']/n_games:.2%})")
-    print(f"Invalid Games: {results['invalid_moves']} ({results['invalid_moves']/n_games:.2%})")
-    
-    return results
-
-if __name__ == "__main__":
-    # 確保保存目錄存在
-    os.makedirs('model_weights', exist_ok=True)
-    
-    # 訓練模型
-    trained_model, history = train_agent(model)
-    
-    # 載入最佳模型行最終測試
-    best_model = tf.keras.models.clone_model(model)
-    best_model.load_weights('model_weights/best_model.weights.h5')
-    
-    # 進行最終測試
-    final_test_results = test_agent(best_model, n_games=100)
-    print("\nFinal Test Results (Best Model):")
-    print(f"Win Rate: {final_test_results['wins']/100:.2%}")
-    print(f"First Player Win Rate: {final_test_results['first_player_wins']/50:.2%}")
-    print(f"Second Player Win Rate: {final_test_results['second_player_wins']/50:.2%}")
-
-    # 進行自我對戰測試
-    print("\nTesting Self-Play Performance:")
-    self_play_results = test_self_play(best_model, n_games=100)
-    
-    # 保存模型和代理函數
-    model.save('my_model.h5', include_optimizer=False)
-    
-    # 創建提交用的代理函數
-    submission_agent = create_submission(best_model)
 
 
-#提交
+def my_agent(obs, config, model):
+    # Number of Columns on the Board.
+    columns = config.columns
+    # Number of Rows on the Board.
+    rows = config.rows
+    # Number of Checkers "in a row" needed to win.
+    inarow = config.inarow
+    # The current serialized Board (rows x columns).
+    board = obs.board
+    # Which player the agent is playing as (1 or 2).
+    mark = obs.mark
+    
+    # 獲取遊戲狀態
+    state = get_board(board, mark)
+    state = np.expand_dims(state, axis=0)
+    state_tensor = tf.convert_to_tensor(state)
+    
+    # 使用模型預測動作概率和狀態價值
+    action_probs, state_value = model(state_tensor, training=False)
+    if len(action_probs.shape) > 2:
+        action_probs = tf.reduce_mean(action_probs, axis=[1,2])
+    
+    # 獲取有效移動
+    valid_moves = [i for i in range(n_cols) if np.asarray(board).reshape(rows, columns)[0][i] == 0]
+    if not valid_moves:
+        best_action = np.random.choice([i for i in range(n_cols)])
+
+    else:            
+        valid_probs = np.array([action_probs[0][i] for i in valid_moves])
+        valid_probs /= np.sum(valid_probs)  # 正規化
+        
+        # 隨機選擇合法動作
+        best_action = np.random.choice(valid_moves, p=valid_probs)
+    
+    
+    return int(best_action)
+
+
+#提交生成
 import inspect
 import os
 
@@ -735,5 +762,39 @@ def write_agent_to_file(function, file):
         f.write(inspect.getsource(function))
         print(function, "written to", file)
 
-write_agent_to_file(submission_agent, "submission.py")
+
+
+
+if __name__ == "__main__":
+    # 確保保存目錄存在
+    os.makedirs('/kaggle/working/model_weights', exist_ok=True)
+
+    # 創建環境
+    env = make('connectx', debug=True)
+
+    # 訓練模型
+    trained_model, history = train_agent(model, save_path = '/kaggle/working/model_weights')
+    
+    
+    # 載入最佳模型行最終測試
+    best_weights = '/kaggle/working/model_weights/final_model.weights.h5'
+    best_model = tf.keras.models.clone_model(model)
+    best_model.load_weights(best_weights)
+    
+    # 進行最終測試
+    final_test_results = test_agent(best_model, n_games=100)
+    print("\nFinal Test Results (Best Model):")
+    print(f"Win Rate: {final_test_results['wins']/100:.2%}")
+    print(f"First Player Win Rate: {final_test_results['first_player_wins']/50:.2%}")
+    print(f"Second Player Win Rate: {final_test_results['second_player_wins']/50:.2%}")
+
+    
+    # 保存模型和代理函數
+    best_model.save('/kaggle/working/my_model.h5', include_optimizer=False)
+    # 創建提交用的代理函數
+    def Agent(obs, config):
+        return my_agent(obs, config, best_model)
+    
+    # 創建提交用的代理函數
+    write_agent_to_file(Agent, "submission.py")
 
